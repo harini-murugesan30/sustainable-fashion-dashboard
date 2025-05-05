@@ -27,9 +27,8 @@ title_suffix = ""
 
 if selected_filter_type == "Product":
     selected_product = st.sidebar.selectbox("Select Product", product_ids)
-    selected_warehouse = st.sidebar.selectbox("Select Your Warehouse", warehouses)
-    filtered = df[(df["Product_ID"] == selected_product) & (df["Warehouse"] == selected_warehouse)]
-    title_suffix = f"for Product {selected_product} and Warehouse {selected_warehouse}"
+    filtered = df[df["Product_ID"] == selected_product]
+    title_suffix = f"for Product {selected_product}"
 
 elif selected_filter_type == "Warehouse":
     selected_warehouse = st.sidebar.selectbox("Select Warehouse", warehouses)
