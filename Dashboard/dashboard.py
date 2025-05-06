@@ -14,6 +14,18 @@ def load_data():
 
 df = load_data()
 
+# --- Aggregate to one row per Factory–Product–Warehouse ---
+agg_df = (
+    df.groupby(["Factory", "Product_ID", "Warehouse"], as_index=False)
+    .agg({
+        "Demand": "sum",
+        "Delay": "mean",
+        "Sustainable_Order": "mean"
+    })
+    .assign(Sustainable_Order=lambda d: (d.Sustainable_Order * 100).round(1))
+)
+df = agg_df
+
 # --- Sidebar filters ---
 st.sidebar.header("🎯 Order Filters")
 product_ids = sorted(df["Product_ID"].unique())
@@ -21,9 +33,6 @@ warehouses = sorted(df["Warehouse"].unique())
 factories = sorted(df["Factory"].unique())
 
 selected_filter_type = st.sidebar.radio("Filter by", ["Product", "Warehouse", "Factory"])
-
-filtered = pd.DataFrame()
-title_suffix = ""
 
 if selected_filter_type == "Product":
     selected_product = st.sidebar.selectbox("Select Product", product_ids)
@@ -39,6 +48,16 @@ else:
     selected_factory = st.sidebar.selectbox("Select Factory", factories)
     filtered = df[df["Factory"] == selected_factory]
     title_suffix = f"for Factory {selected_factory}"
+
+# --- How many top recommendations? ---
+st.sidebar.markdown("---")
+top_n = st.sidebar.number_input(
+    "How many top recommendations?", 
+    min_value=1, 
+    max_value=len(filtered), 
+    value=1, 
+    step=1
+)
 
 # --- Dynamic scoring weights ---
 st.sidebar.markdown("---")
@@ -62,23 +81,28 @@ if valid_weights:
     def compute_score(row):
         demand_score = row["Demand"] / filtered["Demand"].max()
         delay_score = 1 - row["Delay"] / filtered["Delay"].max()
-        sustain_score = row["Sustainable_Order"]
+        sustain_score = row["Sustainable_Order"] / 100  # convert percent back to 0–1
         return w_demand * demand_score + w_delay * delay_score + w_sustain * sustain_score
 
     filtered["Score"] = filtered.apply(compute_score, axis=1)
-    best_row = filtered.sort_values("Score", ascending=False).iloc[0]
+    # get the top N
+    top_recs = filtered.sort_values("Score", ascending=False).head(top_n)
+    best_row = top_recs.iloc[0]
 
-# --- Display Options ---
-display_df = filtered[["Factory", "Product_ID", "Warehouse", "Demand", "Delay", "Sustainable_Order"]].copy()
-display_df.columns = ["Factory", "Product", "Warehouse", "Predicted Demand", "Shipping Delay (days)", "Sustainable Order (1=Yes)"]
-
+# --- Display full results table ---
+display_df = filtered[["Product_ID", "Factory", "Warehouse", "Demand", "Delay", "Sustainable_Order"]].copy()
+display_df.columns = [
+    "Product", "Factory", "Warehouse", 
+    "Predicted Demand", "Shipping Delay (days)", 
+    "Sustainability (%)"
+]
 if valid_weights:
     display_df["Score"] = filtered["Score"].round(2)
 
 sort_col = st.selectbox("Sort Results By", display_df.columns)
-display_df = display_df.sort_values(sort_col, ascending=("Delay" in sort_col or "Shipping" in sort_col))
+ascending = not ("Delay" in sort_col or "Shipping" in sort_col)
+display_df = display_df.sort_values(sort_col, ascending=ascending)
 
-# --- Dataframe ---
 st.subheader(f"📊 FFNetBoost Predictions {title_suffix}")
 st.dataframe(display_df.reset_index(drop=True), use_container_width=True)
 
@@ -86,60 +110,105 @@ st.dataframe(display_df.reset_index(drop=True), use_container_width=True)
 st.download_button(
     label="💾 Download Results as CSV",
     data=display_df.to_csv(index=False),
-    file_name=f"filtered_recommendations.csv",
+    file_name="filtered_recommendations.csv",
     mime="text/csv"
 )
 
-# --- Recommendation ---
+# --- Enhanced Recommendations ---
 if valid_weights:
-    if selected_filter_type == "Factory":
-        st.markdown(f"### ✅ Recommended Record for Factory {selected_factory}")
-        st.success(
-            f"Best combination from **Factory {best_row['Factory']}**:\n\n"
-            f"- **Product:** {best_row['Product_ID']}\n"
-            f"- **Warehouse:** {best_row['Warehouse']}\n"
-            f"- **Score:** {best_row['Score']:.2f}\n"
-            f"- **Demand:** {best_row['Demand']:.1f} units\n"
-            f"- **Delay:** {best_row['Delay']:.1f} days\n"
-            f"- **Sustainability:** {'Yes' if best_row['Sustainable_Order']==1 else 'No'}"
-        )
-    else:
-        st.markdown(f"### ✅ Recommended Record {title_suffix}")
-        st.success(
-            f"**Factory {best_row['Factory']}** is recommended.\n\n"
-            f"- **Score:** {best_row['Score']:.2f}\n"
-            f"- **Product:** {best_row['Product_ID']}\n"
-            f"- **Warehouse:** {best_row['Warehouse']}\n"
-            f"- **Demand:** {best_row['Demand']:.1f} units\n"
-            f"- **Delay:** {best_row['Delay']:.1f} days\n"
-            f"- **Sustainability:** {'Yes' if best_row['Sustainable_Order']==1 else 'No'}"
+    if top_n == 1:
+        # 1) Show key metrics at a glance
+        best = best_row
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Score", f"{best.Score:.2f}")
+        m2.metric("Demand", f"{best.Demand:.0f}")
+        m3.metric("Delay", f"{best.Delay:.1f} days")
+        m4.metric("Sustainability", f"{best.Sustainable_Order:.1f}%")
+        st.markdown(
+            f"**Factory:** {best.Factory}  |  "
+            f"**Product:** {best.Product_ID}  |  "
+            f"**Warehouse:** {best.Warehouse}"
         )
 
-# --- Visual Charts ---
+        # 2) Breakdown of score components
+        st.subheader("🔍 Score Breakdown")
+        demand_part  = w_demand  * (best.Demand  / filtered["Demand"].max())
+        delay_part   = w_delay   * (1 - best.Delay / filtered["Delay"].max())
+        sustain_part = w_sustain * (best.Sustainable_Order / 100)
+        st.write(f"- Demand component: **{demand_part:.2f}**")
+        st.write(f"- Delay component: **{delay_part:.2f}**")
+        st.write(f"- Sustainability component: **{sustain_part:.2f}**")
+
+    else:
+        st.markdown(f"### ✅ Top {top_n} Recommendations {title_suffix}")
+        recs = top_recs[[
+            "Product_ID", "Factory", "Warehouse", 
+            "Demand", "Delay", "Sustainable_Order", "Score"
+        ]].rename(columns={
+            "Product_ID":"Product",
+            "Demand":"Demand (units)",
+            "Delay":"Delay (days)",
+            "Sustainable_Order":"Sustainability (%)"
+        })
+        recs["Score"] = recs.Score.round(2)
+        recs["Sustainability (%)"] = recs["Sustainability (%)"].round(1)
+        st.table(recs.reset_index(drop=True))
+
+# --- Visual Charts (faceted by Factory, colored by Warehouse) ---
 col1, col2 = st.columns(2)
 
 with col1:
     fig_demand = px.bar(
         filtered.sort_values("Demand", ascending=False),
-        x="Factory" if selected_filter_type != "Factory" else "Warehouse",
+        x="Product_ID",
         y="Demand",
-        color="Factory",
+        color="Warehouse",
+        facet_col="Factory",
+        category_orders={
+            "Product_ID": sorted(filtered["Product_ID"].unique()),
+            "Factory": sorted(filtered["Factory"].unique())
+        },
         title=f"📦 Predicted Demand {title_suffix}"
+    )
+    fig_demand.update_layout(
+        xaxis_title="Product",
+        yaxis_title="Predicted Demand",
+        legend_title="Warehouse",
+        margin=dict(t=50, b=50)
     )
     st.plotly_chart(fig_demand, use_container_width=True)
 
 with col2:
     fig_delay = px.bar(
         filtered.sort_values("Delay"),
-        x="Factory" if selected_filter_type != "Factory" else "Warehouse",
+        x="Product_ID",
         y="Delay",
-        color="Factory",
+        color="Warehouse",
+        facet_col="Factory",
+        category_orders={
+            "Product_ID": sorted(filtered["Product_ID"].unique()),
+            "Factory": sorted(filtered["Factory"].unique())
+        },
         title=f"⏱ Predicted Delay {title_suffix}"
+    )
+    fig_delay.update_layout(
+        xaxis_title="Product",
+        yaxis_title="Shipping Delay (days)",
+        legend_title="Warehouse",
+        margin=dict(t=50, b=50)
     )
     st.plotly_chart(fig_delay, use_container_width=True)
 
-# --- Pie Chart for Sustainability ---
-sustain_count = filtered["Sustainable_Order"].map({1: "Sustainable", 0: "Not Sustainable"}).value_counts()
+# --- Pie Chart for Sustainability (raw 0/1 counts) ---
+orig = load_data()
+orig_filtered = orig.merge(
+    filtered[["Factory", "Product_ID", "Warehouse"]],
+    on=["Factory", "Product_ID", "Warehouse"],
+    how="inner"
+)
+sustain_count = orig_filtered["Sustainable_Order"] \
+    .map({1: "Sustainable", 0: "Not Sustainable"}) \
+    .value_counts()
 fig_sustain = px.pie(
     names=sustain_count.index,
     values=sustain_count.values,
