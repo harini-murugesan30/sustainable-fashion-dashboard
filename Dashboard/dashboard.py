@@ -10,7 +10,7 @@ st.markdown("Smart and Sustainable product ordering decisions")
 # --- Load predictions ---
 @st.cache_data
 def load_data():
-    return pd.read_csv("ffnetboost_predictions.csv")
+    return pd.read_csv("Dashboard/ffnetboost_predictions.csv")
 
 df = load_data()
 
