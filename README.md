@@ -1,6 +1,6 @@
 # Sustainable Fashion Thesis Code & Data
 
-This repository contains all code and data supporting my MSc thesis.
+This repository contains all code and data supporting the smart and sustainable product ordering decisions.
 
 ## Contents
 
